@@ -1,0 +1,14 @@
+{
+  "name": "Mi Carrera — Control académico",
+  "short_name": "Mi Carrera",
+  "description": "Pensum, notas, índice, planificación y progreso universitario.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F5F7FB",
+  "theme_color": "#2457E6",
+  "lang": "es",
+  "icons": [
+    { "src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

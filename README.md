@@ -4,6 +4,8 @@ Aplicación web para controlar el pensum universitario, materias aprobadas y en 
 
 ## Funcionalidades
 
+- Inicio limpio con asistente para configurar universidad, carrera y escala académica.
+- Demostración opcional que solo se carga cuando el usuario la selecciona.
 - Dashboard académico adaptable a móvil, tableta y escritorio.
 - Pensum interactivo por semestre, cuatrimestre o trimestre.
 - Estados: aprobada, en curso, pendiente, reprobada, retirada y convalidada.

@@ -136,7 +136,25 @@ const makeSampleCourses = (): Course[] =>
     };
   });
 
-const INITIAL_DATA: AppData = {
+const EMPTY_DATA: AppData = {
+  profile: {
+    studentName: "",
+    university: "",
+    degree: "",
+    studentId: "",
+    startYear: new Date().getFullYear(),
+    totalCredits: 0,
+    scale: 4,
+    passingGrade: 70,
+    periodLabel: "Semestre",
+    graduationDate: "",
+  },
+  courses: [],
+  plans: [],
+  documents: [],
+};
+
+const DEMO_DATA: AppData = {
   profile: {
     studentName: "Luis Fructuoso",
     university: "Universidad Tecnológica del Caribe",
@@ -153,6 +171,14 @@ const INITIAL_DATA: AppData = {
   plans: [],
   documents: [],
 };
+
+function isUntouchedLegacyDemo(data: AppData) {
+  return data.profile.studentId === "2026-0001"
+    && data.profile.studentName === "Luis Fructuoso"
+    && data.documents.length === 0
+    && data.courses.length === COURSE_NAMES.length
+    && data.courses.every((course, index) => course.id === `course-${index + 1}`);
+}
 
 const STATUS_META: Record<CourseStatus, { label: string; short: string }> = {
   passed: { label: "Aprobada", short: "Aprobada" },
@@ -343,8 +369,9 @@ function Modal({ title, children, onClose, wide = false }: { title: string; chil
 }
 
 export default function CareerApp() {
-  const [data, setData] = useState<AppData>(INITIAL_DATA);
+  const [data, setData] = useState<AppData>(EMPTY_DATA);
   const [hydrated, setHydrated] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [activeView, setActiveView] = useState<ViewId>("dashboard");
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     if (typeof window === "undefined") return "light";
@@ -357,7 +384,13 @@ export default function CareerApp() {
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
-    loadStoredData().then((stored) => stored && setData(stored)).finally(() => setHydrated(true));
+    loadStoredData()
+      .then((stored) => {
+        if (stored && !isUntouchedLegacyDemo(stored)) setData(stored);
+        else setOnboardingOpen(true);
+      })
+      .catch(() => setOnboardingOpen(true))
+      .finally(() => setHydrated(true));
   }, []);
 
   useEffect(() => {
@@ -456,6 +489,7 @@ export default function CareerApp() {
         {NAV_ITEMS.slice(0, 6).map((item) => <button key={item.id} className={activeView === item.id ? "active" : ""} onClick={() => navigate(item.id)}><item.icon size={19} /><span>{item.label.replace("Cursos actuales", "Cursos")}</span></button>)}
       </nav>
       {selectedCourse && <CourseEditor course={selectedCourse} profile={data.profile} courses={data.courses} onSave={updateCourse} onClose={() => setSelectedCourse(null)} />}
+      {onboardingOpen && <Onboarding onSkip={() => setOnboardingOpen(false)} onDemo={() => { setData(DEMO_DATA); setOnboardingOpen(false); setToast("Demostración cargada"); }} onComplete={(profile) => { setData((current) => ({ ...current, profile })); setOnboardingOpen(false); setImportOpen(true); }} />}
       {importOpen && <ImportWizard profile={data.profile} onClose={() => setImportOpen(false)} onImport={addImportedCourses} />}
       {toast && <div className="toast"><CheckCircle2 size={19} />{toast}</div>}
     </div>
@@ -472,28 +506,30 @@ function Sidebar({ activeView, navigate, open, close, onImport }: { activeView: 
 }
 
 function Topbar({ data, onMenu, theme, setTheme, notificationsOpen, setNotificationsOpen }: { data: AppData; onMenu: () => void; theme: "light" | "dark"; setTheme: (theme: "light" | "dark") => void; notificationsOpen: boolean; setNotificationsOpen: (value: boolean) => void }) {
-  const initials = data.profile.studentName.split(" ").slice(0, 2).map((part) => part[0]).join("");
+  const displayName = data.profile.studentName || "Tu perfil";
+  const initials = data.profile.studentName ? data.profile.studentName.split(" ").slice(0, 2).map((part) => part[0]).join("") : "MC";
   return <header className="topbar">
     <button className="icon-button menu-button" onClick={onMenu} aria-label="Abrir menú"><Menu size={21} /></button>
-    <div className="university"><div className="university-crest"><BookOpen size={20} /></div><div><strong>{data.profile.university}</strong><span>{data.profile.degree}</span></div></div>
+    <div className="university"><div className="university-crest"><BookOpen size={20} /></div><div><strong>{data.profile.university || "Configura tu universidad"}</strong><span>{data.profile.degree || "Tu carrera"}</span></div></div>
     <div className="top-actions">
       <button className="icon-button" onClick={() => setTheme(theme === "light" ? "dark" : "light")} aria-label={theme === "light" ? "Activar modo oscuro" : "Activar modo claro"}>{theme === "light" ? <Moon size={19} /> : <Sun size={19} />}</button>
       <div className="notification-wrap"><button className="icon-button" onClick={() => setNotificationsOpen(!notificationsOpen)} aria-label="Ver notificaciones"><Bell size={19} /><span className="notification-count">3</span></button>{notificationsOpen && <div className="notification-panel"><div className="notification-title"><strong>Actualizaciones</strong><button onClick={() => setNotificationsOpen(false)}><X size={16} /></button></div><div className="notification-item"><CheckCircle2 size={17} /><span><strong>Buen ritmo académico</strong>Has completado más de la mitad de tu carrera.</span></div><div className="notification-item"><Clock3 size={17} /><span><strong>5 materias en curso</strong>Actualiza tu progreso cuando tengas nuevas notas.</span></div><div className="notification-item"><Target size={17} /><span><strong>Planificación disponible</strong>Prepara tu próximo período.</span></div></div>}</div>
-      <div className="profile-chip"><div className="avatar">{initials}</div><div><strong>{data.profile.studentName}</strong><span>Estudiante · {data.profile.studentId}</span></div><ChevronDown size={16} /></div>
+      <div className="profile-chip"><div className="avatar">{initials}</div><div><strong>{displayName}</strong><span>{data.profile.studentId ? `Estudiante · ${data.profile.studentId}` : "Perfil académico"}</span></div><ChevronDown size={16} /></div>
     </div>
   </header>;
 }
 
 function Dashboard({ data, metrics, navigate, selectCourse }: { data: AppData; metrics: Metrics; navigate: (id: ViewId) => void; selectCourse: (course: Course) => void }) {
   const periods = Math.max(...data.courses.map((course) => course.term), 1);
+  const hasCourses = data.courses.length > 0;
   return <div className="page-stack dashboard-page">
     <section className="career-hero">
-      <div className="hero-copy"><span className="eyebrow">Tu trayectoria académica</span><h1>{data.profile.degree}</h1><p>Tu esfuerzo de hoy construye el impacto de mañana. Sigue avanzando.</p><div className="hero-actions"><button className="button primary" onClick={() => navigate("curriculum")}><BookOpen size={18} />Ver mi pensum</button><button className="button secondary" onClick={() => navigate("simulator")}><TrendingUp size={18} />Simular índice</button></div></div>
+      <div className="hero-copy"><span className="eyebrow">Tu trayectoria académica</span><h1>{data.profile.degree || "Construye el mapa de tu carrera"}</h1><p>{hasCourses ? "Tu esfuerzo de hoy construye el impacto de mañana. Sigue avanzando." : "Carga tu pensum universitario para comenzar a controlar materias, créditos, calificaciones e índice académico."}</p><div className="hero-actions"><button className="button primary" onClick={() => navigate(hasCourses ? "curriculum" : "documents")}><BookOpen size={18} />{hasCourses ? "Ver mi pensum" : "Cargar mi pensum"}</button><button className="button secondary" onClick={() => navigate(hasCourses ? "simulator" : "settings")}><TrendingUp size={18} />{hasCourses ? "Simular índice" : "Configurar perfil"}</button></div></div>
       <ProgressRing value={metrics.progress} />
       <div className="hero-stats"><div><span className="metric-icon blue"><GraduationCap size={19} /></span><p><strong>{metrics.approvedCredits} de {data.profile.totalCredits}</strong><span>Créditos acumulados</span></p></div><div><span className="metric-icon green"><CheckCircle2 size={19} /></span><p><strong>{metrics.approved.length} aprobadas</strong><span>Materias completadas</span></p></div><div><span className="metric-icon purple"><BookOpen size={19} /></span><p><strong>{metrics.inProgress.length} cursando</strong><span>Período actual</span></p></div><div><span className="metric-icon gray"><Clock3 size={19} /></span><p><strong>{metrics.pending.length} pendientes</strong><span>Por completar</span></p></div></div>
       <div className="index-card"><span>Índice acumulado</span><strong>{metrics.index.toFixed(2)}<small>/{data.profile.scale.toFixed(2)}</small></strong><div className="index-divider" /><div className="graduation"><span className="metric-icon green"><CalendarDays size={19} /></span><p><span>Proyección de egreso</span><strong>{formatGraduation(data.profile.graduationDate)}</strong></p></div></div>
     </section>
-    <section><SectionHeader icon={BookOpen} title={`Cursos actuales (${metrics.inProgress.length})`} action={<button className="text-button" onClick={() => navigate("current")}>Ver todos <ArrowRight size={16} /></button>} /><div className="current-grid">{metrics.inProgress.slice(0, 3).map((course) => <CurrentCard key={course.id} course={course} onClick={() => selectCourse(course)} />)}</div></section>
+    <section><SectionHeader icon={BookOpen} title={`Cursos actuales (${metrics.inProgress.length})`} action={hasCourses ? <button className="text-button" onClick={() => navigate("current")}>Ver todos <ArrowRight size={16} /></button> : undefined} /><div className="current-grid">{metrics.inProgress.slice(0, 3).map((course) => <CurrentCard key={course.id} course={course} onClick={() => selectCourse(course)} />)}{!hasCourses && <div className="card dashboard-empty"><span><Upload size={24} /></span><div><strong>Aún no hay materias</strong><p>Importa tu pensum para convertir esta pantalla en tu panel académico personal.</p></div><button className="button compact primary" onClick={() => navigate("documents")}>Comenzar</button></div>}</div></section>
     <section className="curriculum-preview card"><SectionHeader icon={BookOpen} title="Mi pensum — Vista de avance" action={<button className="button compact secondary" onClick={() => navigate("curriculum")}>Ver mi pensum</button>} /><div className="legend"><span><i className="passed" />Aprobada</span><span><i className="in-progress" />En curso</span><span><i className="pending" />Pendiente</span><span><i className="failed" />Requiere atención</span></div><div className="term-timeline">{Array.from({ length: periods }, (_, i) => i + 1).map((term) => { const courses = data.courses.filter((course) => course.term === term); const passed = courses.filter((course) => ["passed", "transferred"].includes(course.status)).length; const active = courses.some((course) => course.status === "in_progress"); return <button key={term} className={`timeline-term ${passed === courses.length ? "complete" : active ? "active" : ""}`} onClick={() => navigate("curriculum")}><span>{term}º {data.profile.periodLabel}</span><i>{passed === courses.length ? <Check size={14} /> : active ? <BookOpen size={13} /> : term}</i><strong>{passed}/{courses.length}</strong></button>; })}</div></section>
   </div>;
 }
@@ -507,6 +543,7 @@ function Curriculum({ data, selectCourse }: { data: AppData; selectCourse: (cour
   const [filter, setFilter] = useState<CourseStatus | "all">("all");
   const terms = Array.from(new Set(data.courses.map((course) => course.term))).sort((a, b) => a - b);
   const visible = (course: Course) => (filter === "all" || course.status === filter) && `${course.code} ${course.name}`.toLowerCase().includes(search.toLowerCase());
+  if (!data.courses.length) return <div className="page-stack"><PageTitle eyebrow="Mapa académico" title="Mi pensum" description="Explora tu carrera por períodos, identifica prerrequisitos y descubre qué materias puedes cursar próximamente." /><div className="card curriculum-empty"><EmptyState icon={Upload} title="Tu pensum está vacío" text="Selecciona Importar documento para cargar el pensum oficial de tu universidad. También puedes usar Excel, CSV o JSON." /></div></div>;
   return <div className="page-stack"><PageTitle eyebrow="Mapa académico" title="Mi pensum" description="Explora tu carrera por períodos, identifica prerrequisitos y descubre qué materias puedes cursar próximamente." />
     <div className="toolbar card"><label className="search-field"><Search size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por código o materia…" /></label><div className="filter-pills"><Filter size={17} />{(["all", "passed", "in_progress", "pending", "failed"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "Todas" : STATUS_META[value].short}</button>)}</div></div>
     <div className="curriculum-board">{terms.map((term) => { const courses = data.courses.filter((course) => course.term === term && visible(course)); const total = data.courses.filter((course) => course.term === term); const completed = total.filter((course) => ["passed", "transferred"].includes(course.status)).length; return <section className="term-column" key={term}><header><div><span>{term}º</span><h2>{data.profile.periodLabel}</h2></div><strong>{completed}/{total.length}</strong></header><div className="term-progress"><span style={{ width: `${total.length ? completed / total.length * 100 : 0}%` }} /></div><div className="term-courses">{courses.length ? courses.map((course) => <button key={course.id} className={`curriculum-course ${course.status}`} onClick={() => selectCourse(course)}><div><StatusIcon status={course.status} /><span><small>{course.code} · {course.credits} cr.</small><strong>{course.name}</strong></span></div>{course.prerequisites.length > 0 && <span className="prereq"><LockKeyhole size={12} />{course.prerequisites.length}</span>} {typeof course.grade === "number" && <b>{course.grade}</b>}</button>) : <div className="empty-term">Sin coincidencias</div>}</div></section>; })}</div>
@@ -569,17 +606,17 @@ function Documents({ data, setData, onImport, showToast }: { data: AppData; setD
   const restore = async (file?: File) => { if (!file) return; try { const restored = JSON.parse(await file.text()) as AppData; if (!restored.profile || !Array.isArray(restored.courses)) throw new Error(); setData(restored); showToast("Respaldo restaurado correctamente"); } catch { showToast("El archivo no es un respaldo válido"); } };
   return <div className="page-stack"><PageTitle eyebrow="Control y privacidad" title="Documentos y respaldos" description="Importa tu información, descarga copias y recupera tu progreso cuando lo necesites." />
     <div className="document-actions"><button className="action-card primary-action" onClick={onImport}><span><Upload size={24} /></span><div><strong>Importar pensum o récord</strong><p>PDF, imagen, Excel, CSV o JSON.</p></div><ArrowRight size={20} /></button><button className="action-card" onClick={exportJson}><span><FileJson size={24} /></span><div><strong>Crear respaldo completo</strong><p>Guarda perfil, materias y planificación.</p></div><Download size={20} /></button><button className="action-card" onClick={exportCsv}><span><FileSpreadsheet size={24} /></span><div><strong>Exportar pensum</strong><p>Compatible con Excel y Google Sheets.</p></div><Download size={20} /></button><button className="action-card" onClick={() => backupRef.current?.click()}><span><RotateCcw size={24} /></span><div><strong>Restaurar respaldo</strong><p>Recupera un archivo JSON anterior.</p></div><Upload size={20} /></button><input ref={backupRef} hidden type="file" accept="application/json,.json" onChange={(e) => restore(e.target.files?.[0])} /></div>
-    <section className="card document-history"><SectionHeader icon={FileText} title="Historial de importaciones" /><div className="document-table"><div className="document-head"><span>Documento</span><span>Tipo</span><span>Materias</span><span>Fecha</span></div>{data.documents.map((document) => <div className="document-row" key={document.id}><span><FileText size={18} /><strong>{document.name}</strong></span><span>{document.type}</span><span>{document.rows}</span><span>{new Intl.DateTimeFormat("es-DO").format(new Date(document.date))}</span></div>)}{!data.documents.length && <EmptyState icon={FileText} title="Aún no has importado documentos" text="La aplicación incluye datos de demostración. Importa tu pensum para comenzar con información real." />}</div></section>
+    <section className="card document-history"><SectionHeader icon={FileText} title="Historial de importaciones" /><div className="document-table"><div className="document-head"><span>Documento</span><span>Tipo</span><span>Materias</span><span>Fecha</span></div>{data.documents.map((document) => <div className="document-row" key={document.id}><span><FileText size={18} /><strong>{document.name}</strong></span><span>{document.type}</span><span>{document.rows}</span><span>{new Intl.DateTimeFormat("es-DO").format(new Date(document.date))}</span></div>)}{!data.documents.length && <EmptyState icon={FileText} title="Aún no has importado documentos" text="Importa tu pensum para comenzar con tu información académica real." />}</div></section>
   </div>;
 }
 
 function SettingsView({ data, setData, showToast }: { data: AppData; setData: React.Dispatch<React.SetStateAction<AppData>>; showToast: (message: string) => void }) {
   const [profile, setProfile] = useState(data.profile);
   const save = () => { setData((current) => ({ ...current, profile })); showToast("Configuración guardada"); };
-  const reset = () => { if (confirm("¿Restaurar los datos de demostración? Se reemplazará la información actual.")) { setData(INITIAL_DATA); showToast("Datos de demostración restaurados"); } };
+  const reset = () => { if (confirm("¿Borrar todos los datos académicos guardados en este dispositivo?")) { setData(EMPTY_DATA); setProfile(EMPTY_DATA.profile); showToast("Datos eliminados correctamente"); } };
   return <div className="page-stack"><PageTitle eyebrow="Personalización" title="Configuración académica" description="Adapta los cálculos y la experiencia a las reglas de tu universidad." />
     <section className="card settings-card"><SectionHeader icon={GraduationCap} title="Perfil académico" /><div className="form-grid"><Field label="Nombre del estudiante"><input value={profile.studentName} onChange={(e) => setProfile({ ...profile, studentName: e.target.value })} /></Field><Field label="Matrícula"><input value={profile.studentId} onChange={(e) => setProfile({ ...profile, studentId: e.target.value })} /></Field><Field label="Universidad" wide><input value={profile.university} onChange={(e) => setProfile({ ...profile, university: e.target.value })} /></Field><Field label="Carrera" wide><input value={profile.degree} onChange={(e) => setProfile({ ...profile, degree: e.target.value })} /></Field><Field label="Año de ingreso"><input type="number" value={profile.startYear} onChange={(e) => setProfile({ ...profile, startYear: Number(e.target.value) })} /></Field><Field label="Proyección de egreso"><input type="month" value={profile.graduationDate} onChange={(e) => setProfile({ ...profile, graduationDate: e.target.value })} /></Field></div></section>
-    <section className="card settings-card"><SectionHeader icon={Settings} title="Reglas de cálculo" /><div className="form-grid"><Field label="Tipo de período"><select value={profile.periodLabel} onChange={(e) => setProfile({ ...profile, periodLabel: e.target.value as Profile["periodLabel"] })}><option>Semestre</option><option>Cuatrimestre</option><option>Trimestre</option></select></Field><Field label="Escala del índice"><select value={profile.scale} onChange={(e) => setProfile({ ...profile, scale: Number(e.target.value) as 4 | 5 })}><option value="4">Escala de 4.00</option><option value="5">Escala de 5.00</option></select></Field><Field label="Nota mínima para aprobar"><input type="number" min="0" max="100" value={profile.passingGrade} onChange={(e) => setProfile({ ...profile, passingGrade: Number(e.target.value) })} /></Field><Field label="Créditos totales"><input type="number" value={profile.totalCredits} onChange={(e) => setProfile({ ...profile, totalCredits: Number(e.target.value) })} /></Field></div><div className="settings-actions"><button className="button danger-ghost" onClick={reset}><RotateCcw size={17} />Restaurar demostración</button><button className="button primary" onClick={save}><Save size={17} />Guardar cambios</button></div></section>
+    <section className="card settings-card"><SectionHeader icon={Settings} title="Reglas de cálculo" /><div className="form-grid"><Field label="Tipo de período"><select value={profile.periodLabel} onChange={(e) => setProfile({ ...profile, periodLabel: e.target.value as Profile["periodLabel"] })}><option>Semestre</option><option>Cuatrimestre</option><option>Trimestre</option></select></Field><Field label="Escala del índice"><select value={profile.scale} onChange={(e) => setProfile({ ...profile, scale: Number(e.target.value) as 4 | 5 })}><option value="4">Escala de 4.00</option><option value="5">Escala de 5.00</option></select></Field><Field label="Nota mínima para aprobar"><input type="number" min="0" max="100" value={profile.passingGrade} onChange={(e) => setProfile({ ...profile, passingGrade: Number(e.target.value) })} /></Field><Field label="Créditos totales"><input type="number" value={profile.totalCredits} onChange={(e) => setProfile({ ...profile, totalCredits: Number(e.target.value) })} /></Field></div><div className="settings-actions"><button className="button danger-ghost" onClick={reset}><Trash2 size={17} />Borrar todos los datos</button><button className="button primary" onClick={save}><Save size={17} />Guardar cambios</button></div></section>
   </div>;
 }
 
@@ -588,6 +625,14 @@ function Field({ label, children, wide = false }: { label: string; children: Rea
 function PageTitle({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) { return <header className="page-title"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></header>; }
 
 function EmptyState({ icon: Icon, title, text }: { icon: typeof BookOpen; title: string; text: string }) { return <div className="empty-state"><span><Icon size={24} /></span><strong>{title}</strong><p>{text}</p></div>; }
+
+function Onboarding({ onComplete, onDemo, onSkip }: { onComplete: (profile: Profile) => void; onDemo: () => void; onSkip: () => void }) {
+  const [step, setStep] = useState(1);
+  const [profile, setProfile] = useState(EMPTY_DATA.profile);
+  return <div className="modal-backdrop welcome-backdrop"><section className="welcome-modal" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+    {step === 1 ? <><div className="welcome-visual"><div className="brand-mark welcome-logo"><GraduationCap size={34} /></div><span className="eyebrow">Bienvenido a Mi Carrera</span><h1 id="welcome-title">Tu carrera, organizada desde el primer día</h1><p>Carga tu pensum, registra tus notas y descubre exactamente cuánto has avanzado. La aplicación comienza vacía y tus datos permanecen en este dispositivo.</p><div className="welcome-features"><span><CheckCircle2 size={16} />Índice y créditos automáticos</span><span><Target size={16} />Prerrequisitos y planificación</span><span><ShieldCheck size={16} />Información privada</span></div></div><div className="welcome-actions"><button className="button primary welcome-primary" onClick={() => setStep(2)}>Configurar mi carrera <ArrowRight size={18} /></button><button className="button secondary" onClick={onDemo}><Sparkles size={17} />Explorar una demostración</button><button className="welcome-skip" onClick={onSkip}>Continuar sin configurar</button></div></> : <><header className="welcome-form-header"><button className="icon-button" onClick={() => setStep(1)} aria-label="Volver"><ChevronRight className="back-icon" size={20} /></button><div><span className="eyebrow">Paso 1 de 2</span><h2 id="welcome-title">Configura tu perfil académico</h2><p>Luego te pediremos el documento de tu pensum.</p></div></header><div className="welcome-form form-grid"><Field label="Tu nombre"><input value={profile.studentName} placeholder="Nombre del estudiante" onChange={(e) => setProfile({ ...profile, studentName: e.target.value })} /></Field><Field label="Matrícula"><input value={profile.studentId} placeholder="Opcional" onChange={(e) => setProfile({ ...profile, studentId: e.target.value })} /></Field><Field label="Universidad" wide><input value={profile.university} placeholder="Nombre de tu universidad" onChange={(e) => setProfile({ ...profile, university: e.target.value })} /></Field><Field label="Carrera" wide><input value={profile.degree} placeholder="Nombre de tu carrera" onChange={(e) => setProfile({ ...profile, degree: e.target.value })} /></Field><Field label="Tipo de período"><select value={profile.periodLabel} onChange={(e) => setProfile({ ...profile, periodLabel: e.target.value as Profile["periodLabel"] })}><option>Semestre</option><option>Cuatrimestre</option><option>Trimestre</option></select></Field><Field label="Escala del índice"><select value={profile.scale} onChange={(e) => setProfile({ ...profile, scale: Number(e.target.value) as 4 | 5 })}><option value="4">4.00</option><option value="5">5.00</option></select></Field></div><div className="welcome-form-actions"><button className="button primary" disabled={!profile.university.trim() || !profile.degree.trim()} onClick={() => onComplete(profile)}>Guardar y cargar pensum <Upload size={17} /></button></div></>}
+  </section></div>;
+}
 
 function CourseEditor({ course, profile, courses, onSave, onClose }: { course: Course; profile: Profile; courses: Course[]; onSave: (course: Course) => void; onClose: () => void }) {
   const [draft, setDraft] = useState(course);
