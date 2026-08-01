@@ -1,0 +1,4 @@
+codigo,materia,creditos,periodo,estado,nota,prerrequisitos
+MAT-101,Matemática I,4,1,Aprobada,92,
+INF-101,Introducción a la Programación,4,1,Aprobada,95,
+INF-201,Programación II,4,2,En curso,88,INF-101
