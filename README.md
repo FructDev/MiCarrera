@@ -12,7 +12,7 @@ Aplicación web para controlar el pensum universitario, materias aprobadas y en 
 - Cálculo configurable del índice en escala de 4.00 o 5.00.
 - Simulación del índice con calificaciones futuras.
 - Planificador basado en prerrequisitos y carga de créditos.
-- Importación de PDF, imágenes con OCR, Excel, CSV y JSON.
+- Importación de PDF con detección de filas, períodos y prerrequisitos; imágenes con OCR, Excel, CSV y JSON.
 - Exportación de respaldo JSON y pensum CSV.
 - Almacenamiento privado en IndexedDB, modo oscuro y funcionamiento PWA.
 

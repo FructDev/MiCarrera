@@ -298,27 +298,89 @@ function parseCsv(text: string): ImportedCourse[] {
   });
 }
 
-function parseAcademicText(text: string): ImportedCourse[] {
+export function parseAcademicText(text: string): ImportedCourse[] {
+  const TERM_WORDS: Array<[string, number]> = [
+    ["DUODECIMO", 12], ["UNDECIMO", 11], ["DECIMO", 10], ["NOVENO", 9],
+    ["OCTAVO", 8], ["SEPTIMO", 7], ["SEXTO", 6], ["QUINTO", 5],
+    ["CUARTO", 4], ["TERCER", 3], ["SEGUNDO", 2], ["PRIMER", 1],
+  ];
+  const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
   const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter((line) => line.length > 4);
   const results: ImportedCourse[] = [];
-  const pattern = /^([A-ZÁÉÍÓÚÑ]{2,8}[\s-]?\d{2,5})\s+(.+?)(?:\s+(\d(?:\.\d)?))?(?:\s+(\d{2,3}))?$/i;
+  const seenCodes = new Set<string>();
+  let currentTerm = 1;
+
   lines.forEach((line, idx) => {
-    const match = line.match(pattern);
+    const normalizedLine = normalize(line);
+    if (/\b(CUATRIMESTRE|SEMESTRE|TRIMESTRE)\b/.test(normalizedLine)) {
+      const wordTerm = TERM_WORDS.find(([word]) => normalizedLine.includes(word));
+      const numericTerm = normalizedLine.match(/\b(\d{1,2})(?:ER|RO|DO|TO|MO|NO|VO)?\.?\s+(?:CUATRIMESTRE|SEMESTRE|TRIMESTRE)\b/);
+      currentTerm = wordTerm?.[1] ?? (Number(numericTerm?.[1]) || currentTerm);
+      return;
+    }
+
+    const match = line.match(/^([A-ZÁÉÍÓÚÑ]{2,8})\s*[- ]?\s*(\d{2,5})\s+(.+)$/i);
     if (!match) return;
-    const grade = match[4] ? Number(match[4]) : undefined;
+    const code = `${match[1]}-${match[2]}`.toUpperCase();
+    if (seenCodes.has(code)) return;
+
+    const remainder = match[3].trim();
+    const numericTokens = Array.from(remainder.matchAll(/(^|\s)(\d{1,3}(?:[.,]\d+)?)(?=\s|$)/g));
+    const creditToken = numericTokens.find((token) => {
+      const value = Number(token[2].replace(",", "."));
+      return value > 0 && value <= 12;
+    });
+    if (!creditToken || creditToken.index === undefined) return;
+
+    const creditStart = creditToken.index + creditToken[1].length;
+    const name = remainder.slice(0, creditStart).trim();
+    if (name.length < 3) return;
+    const credits = Number(creditToken[2].replace(",", "."));
+    const tail = remainder.slice(creditStart + creditToken[2].length).trim();
+    const gradeToken = Array.from(tail.matchAll(/(^|\s)(\d{1,3}(?:[.,]\d+)?)(?=\s|$)/g))
+      .map((token) => Number(token[2].replace(",", ".")))
+      .find((value) => value >= 0 && value <= 100);
+    const prerequisites = Array.from(tail.matchAll(/\b([A-ZÁÉÍÓÚÑ]{2,8})\s*-\s*(\d{2,5})\b/gi))
+      .map((prerequisite) => `${prerequisite[1]}-${prerequisite[2]}`.toUpperCase());
+    const periodRequirement = normalize(tail).match(/\b(\d{1,2})(?:ER|RO|DO|TO|MO|NO|VO)\.?\s+CUAT\.?\b/);
+    if (periodRequirement) prerequisites.push(`PERIODO-${periodRequirement[1]}`);
+    if (/\bTODAS\b/.test(normalize(tail))) prerequisites.push("TODAS");
+
+    seenCodes.add(code);
     results.push({
       id: `text-${Date.now()}-${idx}`,
-      code: match[1].replace(/\s+/g, "-").toUpperCase(),
-      name: match[2].trim(),
-      credits: Number(match[3]) || 3,
-      term: 1,
-      status: grade !== undefined ? (grade >= 70 ? "passed" : "failed") : "pending",
-      grade,
-      prerequisites: [],
+      code,
+      name,
+      credits,
+      term: currentTerm,
+      status: gradeToken !== undefined ? (gradeToken >= 70 ? "passed" : "failed") : "pending",
+      grade: gradeToken,
+      prerequisites,
       attempts: 1,
     });
   });
   return results;
+}
+
+export function pdfTextItemsToLines(items: unknown[]) {
+  const rows: Array<{ y: number; parts: Array<{ x: number; text: string }> }> = [];
+  items.forEach((item) => {
+    const candidate = item as { str?: unknown; transform?: unknown };
+    if (typeof candidate?.str !== "string" || !candidate.str.trim() || !Array.isArray(candidate.transform)) return;
+    const x = Number(candidate.transform[4]);
+    const y = Number(candidate.transform[5]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    let row = rows.find((existing) => Math.abs(existing.y - y) <= 2);
+    if (!row) {
+      row = { y, parts: [] };
+      rows.push(row);
+    }
+    row.parts.push({ x, text: candidate.str.trim() });
+  });
+  return rows
+    .sort((a, b) => b.y - a.y)
+    .map((row) => row.parts.sort((a, b) => a.x - b.x).map((part) => part.text).join(" ").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 }
 
 const NAV_ITEMS = [
@@ -577,7 +639,14 @@ function ProgressView({ data, metrics }: { data: AppData; metrics: Metrics }) {
 }
 
 function Planner({ data, setData }: { data: AppData; setData: React.Dispatch<React.SetStateAction<AppData>> }) {
-  const candidates = data.courses.filter((course) => course.status === "pending" && course.prerequisites.every((code) => data.courses.some((item) => item.code === code && ["passed", "transferred"].includes(item.status))));
+  const candidates = data.courses.filter((course) => course.status === "pending" && course.prerequisites.every((code) => {
+    if (code === "TODAS") return data.courses.every((item) => item.id === course.id || ["passed", "transferred"].includes(item.status));
+    if (code.startsWith("PERIODO-")) {
+      const requiredTerm = Number(code.split("-")[1]);
+      return data.courses.filter((item) => item.term <= requiredTerm).every((item) => ["passed", "transferred"].includes(item.status));
+    }
+    return data.courses.some((item) => item.code === code && ["passed", "transferred"].includes(item.status));
+  }));
   const plannedIds = data.plans.map((plan) => plan.courseId);
   const credits = data.plans.reduce((sum, plan) => sum + (data.courses.find((course) => course.id === plan.courseId)?.credits ?? 0), 0);
   const toggle = (course: Course) => setData((current) => ({ ...current, plans: plannedIds.includes(course.id) ? current.plans.filter((plan) => plan.courseId !== course.id) : [...current.plans, { courseId: course.id, term: "Próximo período", expectedGrade: 85 }] }));
@@ -636,7 +705,11 @@ function Onboarding({ onComplete, onDemo, onSkip }: { onComplete: (profile: Prof
 
 function CourseEditor({ course, profile, courses, onSave, onClose }: { course: Course; profile: Profile; courses: Course[]; onSave: (course: Course) => void; onClose: () => void }) {
   const [draft, setDraft] = useState(course);
-  const prerequisiteNames = draft.prerequisites.map((code) => courses.find((item) => item.code === code)?.name ?? code);
+  const prerequisiteNames = draft.prerequisites.map((code) => {
+    if (code === "TODAS") return "Todas las materias anteriores";
+    if (code.startsWith("PERIODO-")) return `Completar el ${code.split("-")[1]}º ${profile.periodLabel.toLowerCase()}`;
+    return courses.find((item) => item.code === code)?.name ?? code;
+  });
   return <Modal title="Detalle de la materia" onClose={onClose}><div className="course-editor"><div className="course-editor-heading"><div className="course-icon large"><BookOpen size={25} /></div><div><span>{draft.code} · {draft.credits} créditos</span><h3>{draft.name}</h3><StatusBadge status={draft.status} /></div></div><div className="form-grid"><Field label="Estado"><select value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as CourseStatus })}>{Object.entries(STATUS_META).map(([value, meta]) => <option key={value} value={value}>{meta.label}</option>)}</select></Field><Field label="Calificación"><input type="number" min="0" max="100" value={draft.grade ?? ""} placeholder="0–100" onChange={(e) => setDraft({ ...draft, grade: e.target.value ? Number(e.target.value) : undefined })} /></Field><Field label="Créditos"><input type="number" min="1" max="12" value={draft.credits} onChange={(e) => setDraft({ ...draft, credits: Number(e.target.value) })} /></Field><Field label={profile.periodLabel}><input type="number" min="1" value={draft.term} onChange={(e) => setDraft({ ...draft, term: Number(e.target.value) })} /></Field><Field label="Intentos"><input type="number" min="1" value={draft.attempts} onChange={(e) => setDraft({ ...draft, attempts: Number(e.target.value) })} /></Field><Field label="Avance"><input type="number" min="0" max="100" value={draft.progress ?? 0} onChange={(e) => setDraft({ ...draft, progress: Number(e.target.value) })} /></Field><Field label="Notas" wide><textarea value={draft.notes ?? ""} placeholder="Observaciones, profesor, sección…" onChange={(e) => setDraft({ ...draft, notes: e.target.value })} /></Field></div>{prerequisiteNames.length > 0 && <div className="prerequisite-box"><LockKeyhole size={17} /><div><strong>Prerrequisitos</strong><p>{prerequisiteNames.join(", ")}</p></div></div>}<div className="modal-actions"><button className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" onClick={() => onSave(draft)}><Save size={17} />Guardar materia</button></div></div></Modal>;
 }
 
@@ -648,11 +721,12 @@ function ImportWizard({ profile, onClose, onImport }: { profile: Profile; onClos
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const processFile = async () => {
     if (!file) return;
-    setProcessing(true); setError(""); setProgress(8);
+    setProcessing(true); setError(""); setNotice(""); setProgress(8);
     try {
       const extension = file.name.split(".").pop()?.toLowerCase();
       let parsed: ImportedCourse[] = [];
@@ -664,11 +738,15 @@ function ImportWizard({ profile, onClose, onImport }: { profile: Profile; onClos
       else if (["xlsx", "xls"].includes(extension ?? "")) {
         setProgress(25); const XLSX = await import("xlsx"); const workbook = XLSX.read(await file.arrayBuffer()); const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[workbook.SheetNames[0]]); parsed = parseCsv(csv);
       } else if (extension === "pdf") {
-        setProgress(25); const pdfjs = await import("pdfjs-dist"); pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString(); const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise; let text = ""; for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) { setProgress(25 + Math.round(pageNumber / pdf.numPages * 45)); const page = await pdf.getPage(pageNumber); const content = await page.getTextContent(); text += content.items.map((item) => "str" in item ? item.str : "").join(" ") + "\n"; } parsed = parseAcademicText(text);
+        setProgress(25); const pdfjs = await import("pdfjs-dist"); pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString(); const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise; let text = ""; for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) { setProgress(25 + Math.round(pageNumber / pdf.numPages * 45)); const page = await pdf.getPage(pageNumber); const content = await page.getTextContent(); text += `${pdfTextItemsToLines(content.items).join("\n")}\n`; } parsed = parseAcademicText(text);
       } else if (["png", "jpg", "jpeg", "webp"].includes(extension ?? "")) {
         setProgress(18); const { createWorker } = await import("tesseract.js"); const worker = await createWorker("spa", 1, { logger: (message) => { if (message.status === "recognizing text") setProgress(20 + Math.round((message.progress ?? 0) * 65)); } }); const result = await worker.recognize(file); await worker.terminate(); parsed = parseAcademicText(result.data.text);
       }
       if (!parsed.length) throw new Error("No se detectaron materias. Prueba con CSV/Excel o un documento más nítido.");
+      if (mode === "record" && !parsed.some((row) => typeof row.grade === "number")) {
+        setMode("curriculum");
+        setNotice("Detectamos que este archivo es un pensum sin calificaciones. Lo importaremos como pensum; para calcular tu índice, carga después tu récord de notas.");
+      }
       setRows(parsed); setProgress(100); setStep(3);
     } catch (err) { setError(err instanceof Error ? err.message : "No pudimos leer este documento."); }
     finally { setProcessing(false); }
@@ -678,8 +756,8 @@ function ImportWizard({ profile, onClose, onImport }: { profile: Profile; onClos
   const updateRow = (index: number, patch: Partial<ImportedCourse>) => setRows((current) => current.map((row, i) => i === index ? { ...row, ...patch } : row));
   return <Modal title="Importar información académica" onClose={onClose} wide><div className="wizard-steps">{["Tipo", "Documento", "Revisión"].map((label, index) => <div key={label} className={step >= index + 1 ? "active" : ""}><span>{step > index + 1 ? <Check size={14} /> : index + 1}</span><strong>{label}</strong></div>)}</div>
     <div className="wizard-body">{step === 1 && <div className="type-selection"><button className={mode === "curriculum" ? "selected" : ""} onClick={() => setMode("curriculum")}><BookOpen size={27} /><strong>Importar pensum</strong><p>Materias, créditos, períodos y prerrequisitos.</p><span>{mode === "curriculum" && <Check size={15} />}</span></button><button className={mode === "record" ? "selected" : ""} onClick={() => setMode("record")}><BarChart3 size={27} /><strong>Importar récord</strong><p>Calificaciones y estados de materias cursadas.</p><span>{mode === "record" && <Check size={15} />}</span></button><div className="privacy-banner"><ShieldCheck size={20} /><div><strong>Procesamiento privado</strong><p>El documento se analiza en tu navegador y no se envía a un servidor.</p></div></div></div>}
-    {step === 2 && <div><button className={`dropzone ${file ? "has-file" : ""}`} onClick={() => fileRef.current?.click()}><input ref={fileRef} type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xls,.csv,.txt,.json" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setError(""); }} />{file ? <><CheckCircle2 size={34} /><strong>{file.name}</strong><span>{(file.size / 1024 / 1024).toFixed(2)} MB · Selecciona para cambiar</span></> : <><Upload size={34} /><strong>Selecciona o arrastra tu documento</strong><span>PDF, imagen, Excel, CSV o JSON · máximo recomendado 15 MB</span></>}</button>{processing && <div className="processing"><div><span style={{ width: `${progress}%` }} /></div><p>Analizando documento… {progress}%</p></div>}{error && <div className="error-banner"><AlertCircle size={18} />{error}</div>}<div className="format-help"><FileText size={18} /><p><strong>Mejor resultado:</strong> usa Excel/CSV con columnas código, materia, créditos, período, estado y nota. Los PDF e imágenes siempre pasan por revisión.</p></div></div>}
-    {step === 3 && <div className="review-step"><div className="review-summary"><CheckCircle2 size={20} /><span><strong>{rows.length} materias detectadas</strong>Revisa los datos antes de importarlos.</span></div><div className="review-table"><div className="review-head"><span>Código</span><span>Materia</span><span>Cr.</span><span>Período</span><span>Nota</span><span /></div>{rows.map((row, index) => <div className="review-row" key={row.id ?? index}><input value={row.code ?? ""} onChange={(e) => updateRow(index, { code: e.target.value })} /><input value={row.name} onChange={(e) => updateRow(index, { name: e.target.value })} /><input type="number" value={row.credits ?? 3} onChange={(e) => updateRow(index, { credits: Number(e.target.value) })} /><input type="number" value={row.term ?? 1} onChange={(e) => updateRow(index, { term: Number(e.target.value) })} /><input type="number" placeholder="—" value={row.grade ?? ""} onChange={(e) => { const grade = e.target.value ? Number(e.target.value) : undefined; updateRow(index, { grade, status: grade === undefined ? row.status : grade >= profile.passingGrade ? "passed" : "failed" }); }} /><button onClick={() => setRows((current) => current.filter((_, i) => i !== index))} aria-label="Eliminar fila"><Trash2 size={16} /></button></div>)}</div></div>}</div>
+    {step === 2 && <div><button className={`dropzone ${file ? "has-file" : ""}`} onClick={() => fileRef.current?.click()}><input ref={fileRef} type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xls,.csv,.txt,.json" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setError(""); setNotice(""); }} />{file ? <><CheckCircle2 size={34} /><strong>{file.name}</strong><span>{(file.size / 1024 / 1024).toFixed(2)} MB · Selecciona para cambiar</span></> : <><Upload size={34} /><strong>Selecciona o arrastra tu documento</strong><span>PDF, imagen, Excel, CSV o JSON · máximo recomendado 15 MB</span></>}</button>{processing && <div className="processing"><div><span style={{ width: `${progress}%` }} /></div><p>Analizando documento… {progress}%</p></div>}{error && <div className="error-banner"><AlertCircle size={18} />{error}</div>}<div className="format-help"><FileText size={18} /><p><strong>Mejor resultado:</strong> usa Excel/CSV con columnas código, materia, créditos, período, estado y nota. Los PDF e imágenes siempre pasan por revisión.</p></div></div>}
+    {step === 3 && <div className="review-step">{notice && <div className="review-notice"><CircleHelp size={19} /><span>{notice}</span></div>}<div className="review-summary"><CheckCircle2 size={20} /><span><strong>{rows.length} materias detectadas</strong>Revisa los datos antes de importarlos.</span></div><div className="review-table"><div className="review-head"><span>Código</span><span>Materia</span><span>Cr.</span><span>Período</span><span>Nota</span><span /></div>{rows.map((row, index) => <div className="review-row" key={row.id ?? index}><input value={row.code ?? ""} onChange={(e) => updateRow(index, { code: e.target.value })} /><input value={row.name} onChange={(e) => updateRow(index, { name: e.target.value })} /><input type="number" value={row.credits ?? 3} onChange={(e) => updateRow(index, { credits: Number(e.target.value) })} /><input type="number" value={row.term ?? 1} onChange={(e) => updateRow(index, { term: Number(e.target.value) })} /><input type="number" placeholder="—" value={row.grade ?? ""} onChange={(e) => { const grade = e.target.value ? Number(e.target.value) : undefined; updateRow(index, { grade, status: grade === undefined ? row.status : grade >= profile.passingGrade ? "passed" : "failed" }); }} /><button onClick={() => setRows((current) => current.filter((_, i) => i !== index))} aria-label="Eliminar fila"><Trash2 size={16} /></button></div>)}</div></div>}</div>
     <div className="wizard-actions"><button className="button secondary" onClick={() => step === 1 ? onClose() : setStep((current) => current - 1)}>{step === 1 ? "Cancelar" : "Atrás"}</button>{step === 1 && <button className="button primary" onClick={() => setStep(2)}>Continuar <ArrowRight size={17} /></button>}{step === 2 && <button className="button primary" disabled={!file || processing} onClick={processFile}>{processing ? "Analizando…" : "Analizar documento"}</button>}{step === 3 && <button className="button primary" disabled={!rows.length} onClick={confirmImport}><Check size={17} />Importar {rows.length} materias</button>}</div>
   </Modal>;
 }
